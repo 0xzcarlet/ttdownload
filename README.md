@@ -40,6 +40,8 @@ Example file content:
 sessionid=xxx; sid_guard=yyy; tt_csrf_token=zzz
 ```
 
+Need a step-by-step cookie export tutorial with Cookie-Editor? See [doc/cokie.md](doc/cokie.md).
+
 4. Run the tool with the TikTok username you want to download from.
 
 ```bash
