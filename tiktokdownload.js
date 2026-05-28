@@ -3,13 +3,20 @@
  * TikTok Profile Video Downloader
  *
  * Usage:
- *   node tiktokdownload.js <username|profile_url>
+ *   Single user:  node tiktokdownload.js <username|profile_url>
+ *   Multi-user:   node tiktokdownload.js
+ *                 (reads usernames from username.txt)
  *
  * Examples:
  *   node tiktokdownload.js @someuser
  *   node tiktokdownload.js https://www.tiktok.com/@someuser
  *   TIKTOK_COOKIE="your_cookie" node tiktokdownload.js @someuser
  *   TIKTOK_COOKIE_FILE="./tiktok-cookie.txt" node tiktokdownload.js @someuser
+ *
+ * Multi-user example:
+ *   1. Create username.txt with one username per line
+ *   2. Run: TIKTOK_COOKIE_FILE="./cokie.txt" node tiktokdownload.js
+ *   3. Enter how many videos to download per account
  */
 
 const fs = require('fs');
@@ -115,6 +122,20 @@ function getCookieValue() {
   return fileContents.replace(/^cookie:\s*/i, '').trim();
 }
 
+function loadUsernamesFromFile(filePath) {
+  const resolvedPath = path.resolve(filePath);
+  if (!fs.existsSync(resolvedPath)) {
+    return [];
+  }
+
+  const content = fs.readFileSync(resolvedPath, 'utf8');
+  return content
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'))
+    .map((line) => extractUsername(line));
+}
+
 function printProfileSummary(profile, totalVideoPosts, usingCookie) {
   console.log('');
   console.log('Profile summary');
@@ -159,35 +180,51 @@ async function promptDownloadCount(totalVideos) {
   }
 }
 
-async function run() {
-  const input = process.argv[2];
-  if (!input) {
-    console.error('Usage: node tiktokdownload.js <username|profile_url>');
-    process.exit(1);
-  }
+async function promptVideoCount() {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
 
-  const requestedUsername = extractUsername(input);
-  if (!requestedUsername) {
-    console.error('Error: Could not determine TikTok username from input:', input);
-    process.exit(1);
-  }
-
-  let cookie = '';
   try {
-    cookie = getCookieValue();
-  } catch (error) {
-    console.error(`Error loading cookie: ${error.message}`);
-    return;
-  }
+    while (true) {
+      const answer = (
+        await rl.question(
+          'How many latest videos to download per account? Enter a number (e.g. 10): '
+        )
+      )
+        .trim()
+        .toLowerCase();
 
+      if (answer === 'all') {
+        return 'all';
+      }
+
+      const parsed = Number.parseInt(answer, 10);
+      if (Number.isInteger(parsed) && parsed >= 1) {
+        return parsed;
+      }
+
+      console.log('Invalid input. Enter a positive number or "all".');
+    }
+  } finally {
+    rl.close();
+  }
+}
+
+async function downloadSingleUser(requestedUsername, videoCount, cookie) {
+  console.log('');
+  console.log(`${'='.repeat(60)}`);
+  console.log(`Processing user: @${requestedUsername}`);
+  console.log(`${'='.repeat(60)}`);
   console.log(`Opening TikTok profile in browser for user: ${requestedUsername}`);
 
   let session;
   try {
     session = await openProfileSession(requestedUsername, cookie || undefined);
   } catch (error) {
-    console.error(`Error fetching profile: ${error.message}`);
-    return;
+    console.error(`Error fetching profile for @${requestedUsername}: ${error.message}`);
+    return { username: requestedUsername, downloaded: 0, skipped: 0, failed: 0, error: error.message };
   }
 
   const { profile } = session;
@@ -202,7 +239,7 @@ async function run() {
     } catch (error) {
       await closeProfileSession(session);
       console.error(`Error collecting videos from profile: ${error.message}`);
-      return;
+      return { username: requestedUsername, downloaded: 0, skipped: 0, failed: 0, error: error.message };
     }
   }
 
@@ -211,10 +248,19 @@ async function run() {
   if (!eligibleVideoCount) {
     await closeProfileSession(session);
     console.log('No video posts were found for this profile.');
-    return;
+    return { username: requestedUsername, downloaded: 0, skipped: 0, failed: 0, error: null };
   }
 
-  const selectedCount = await promptDownloadCount(eligibleVideoCount);
+  // Determine how many videos to actually download
+  let selectedCount;
+  if (videoCount === 'all') {
+    selectedCount = eligibleVideoCount;
+  } else if (typeof videoCount === 'number') {
+    selectedCount = Math.min(videoCount, eligibleVideoCount);
+  } else {
+    // Single-user mode: prompt user interactively
+    selectedCount = await promptDownloadCount(eligibleVideoCount);
+  }
 
   let selectedPosts = prefetchedVideos.slice(0, selectedCount);
   if (selectedPosts.length < selectedCount) {
@@ -223,7 +269,7 @@ async function run() {
     } catch (error) {
       await closeProfileSession(session);
       console.error(`Error collecting selected video links: ${error.message}`);
-      return;
+      return { username: requestedUsername, downloaded: 0, skipped: 0, failed: 0, error: error.message };
     }
   }
 
@@ -231,7 +277,7 @@ async function run() {
 
   if (!selectedPosts.length) {
     console.log('No video links could be collected from the profile.');
-    return;
+    return { username: requestedUsername, downloaded: 0, skipped: 0, failed: 0, error: null };
   }
 
   if (selectedPosts.length < selectedCount) {
@@ -240,7 +286,8 @@ async function run() {
     );
   }
 
-  const outDir = path.join(process.cwd(), profile.username);
+  // OUTPUT DIRECTORY: ./video/username/
+  const outDir = path.join(process.cwd(), 'video', profile.username);
   fs.mkdirSync(outDir, { recursive: true });
 
   console.log('');
@@ -279,11 +326,95 @@ async function run() {
   }
 
   console.log('');
-  console.log('Download summary');
+  console.log(`Download summary for @${profile.username}`);
   console.log(`Selected videos: ${selectedPosts.length}`);
   console.log(`Downloaded HD: ${downloadedCount}`);
   console.log(`Skipped (HD unavailable): ${skippedHdUnavailableCount}`);
   console.log(`Failed: ${failedCount}`);
+
+  return {
+    username: profile.username,
+    downloaded: downloadedCount,
+    skipped: skippedHdUnavailableCount,
+    failed: failedCount,
+    error: null,
+  };
+}
+
+async function run() {
+  const input = process.argv[2];
+
+  let cookie = '';
+  try {
+    cookie = getCookieValue();
+  } catch (error) {
+    console.error(`Error loading cookie: ${error.message}`);
+    return;
+  }
+
+  // MODE 1: Single user mode (backward compatible)
+  if (input) {
+    const requestedUsername = extractUsername(input);
+    if (!requestedUsername) {
+      console.error('Error: Could not determine TikTok username from input:', input);
+      process.exit(1);
+    }
+
+    // Single user mode: videoCount = null → will prompt interactively
+    await downloadSingleUser(requestedUsername, null, cookie);
+    return;
+  }
+
+  // MODE 2: Multi-account mode (read from username.txt)
+  const usernameFile = path.join(process.cwd(), 'username.txt');
+  const usernames = loadUsernamesFromFile(usernameFile);
+
+  if (!usernames.length) {
+    console.error('Usage:');
+    console.error('  Single user:  node tiktokdownload.js <username|profile_url>');
+    console.error('  Multi-user:   node tiktokdownload.js');
+    console.error('');
+    console.error('For multi-user mode, create a "username.txt" file with one username per line.');
+    process.exit(1);
+  }
+
+  console.log(`Found ${usernames.length} username(s) in username.txt:`);
+  for (const [i, u] of usernames.entries()) {
+    console.log(`  ${i + 1}. @${u}`);
+  }
+  console.log('');
+
+  const videoCount = await promptVideoCount();
+
+  console.log('');
+  console.log(`Will download ${videoCount === 'all' ? 'ALL' : videoCount} latest video(s) per account.`);
+  console.log(`Starting batch download for ${usernames.length} account(s)...`);
+
+  const results = [];
+  for (const username of usernames) {
+    const result = await downloadSingleUser(username, videoCount, cookie);
+    results.push(result);
+  }
+
+  // Print batch summary
+  console.log('');
+  console.log('='.repeat(60));
+  console.log('BATCH DOWNLOAD COMPLETE');
+  console.log('='.repeat(60));
+  console.log('');
+
+  for (const r of results) {
+    const status = r.error ? `ERROR: ${r.error}` : `OK (${r.downloaded} downloaded, ${r.skipped} skipped, ${r.failed} failed)`;
+    console.log(`  @${r.username}: ${status}`);
+  }
+
+  const totalDownloaded = results.reduce((sum, r) => sum + r.downloaded, 0);
+  const totalSkipped = results.reduce((sum, r) => sum + r.skipped, 0);
+  const totalFailed = results.reduce((sum, r) => sum + r.failed, 0);
+  const totalErrors = results.filter((r) => r.error).length;
+
+  console.log('');
+  console.log(`Total: ${totalDownloaded} downloaded, ${totalSkipped} skipped, ${totalFailed} failed, ${totalErrors} error(s)`);
 }
 
 run().catch((error) => {

@@ -59,13 +59,39 @@ TIKTOK_COOKIE_FILE="./cokie.txt" node tiktokdownload.js https://www.tiktok.com/@
 - type `all` to download every available video
 - type a number such as `5` to download the latest 5 videos
 
-6. Downloaded files will be saved into a folder named after the target username.
+6. Downloaded files will be saved into `./video/<username>/`.
 
 Example:
 
 ```bash
-./exampleuser/
+./video/exampleuser/
 ```
+
+## Multi-Account Download
+
+To download videos from multiple accounts at once:
+
+1. Create a `username.txt` file in the project root with one username per line.
+
+```txt
+@firstuser
+seconduser
+https://www.tiktok.com/@thirduser
+```
+
+Lines starting with `#` are treated as comments and ignored.
+
+2. Run the tool without any arguments:
+
+```bash
+TIKTOK_COOKIE_FILE="./cokie.txt" node tiktokdownload.js
+```
+
+3. Enter how many latest videos to download per account (e.g. `10` or `all`).
+
+4. The tool will process each account sequentially and show a batch summary at the end.
+
+All videos are saved to `./video/<username>/` for each account.
 
 Optional:
 
@@ -87,7 +113,7 @@ CHROME_EXECUTABLE_PATH="/path/to/Google Chrome" TIKTOK_COOKIE_FILE="./cokie.txt"
 - Add filters for date range or maximum video count
 - Add a more detailed batch progress summary
 - Add metadata export to JSON or CSV
-- Add multi-profile download support
+- ✅ ~~Add multi-profile download support~~
 
 ## How to Contribute
 
